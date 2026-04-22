@@ -1,0 +1,140 @@
+services:
+  # ─── MongoDB ─────────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7.0
+    container_name: shopmesh-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - shopmesh-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ─── Auth Service ─────────────────────────────────────────────────────────
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: shopmesh-auth
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - MONGO_URI=mongodb://mongo:27017/authdb
+      - JWT_SECRET=shopmesh_jwt_secret_change_in_production_2024
+      - JWT_EXPIRES_IN=24h
+      - NODE_ENV=production
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - shopmesh-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ─── Product Service ─────────────────────────────────────────────────────
+  product-service:
+    build:
+      context: ./product-service
+      dockerfile: Dockerfile
+    container_name: shopmesh-products
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - MONGO_URI=mongodb://mongo:27017/productdb
+      - AUTH_SERVICE_URL=http://auth-service:3001
+      - NODE_ENV=production
+    depends_on:
+      mongo:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    networks:
+      - shopmesh-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  # ─── Order Service ────────────────────────────────────────────────────────
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: shopmesh-orders
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+      - DB_NAME=orderdb
+      - AUTH_SERVICE_URL=http://auth-service:3001
+      - PRODUCT_SERVICE_URL=http://product-service:3002
+      - PORT=3003
+    depends_on:
+      mongo:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+    networks:
+      - shopmesh-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3003/health')"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ─── Frontend ─────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_AUTH_SERVICE_URL=http://localhost:3001
+        - REACT_APP_PRODUCT_SERVICE_URL=http://localhost:3002
+        - REACT_APP_ORDER_SERVICE_URL=http://localhost:3003
+    container_name: shopmesh-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - auth-service
+      - product-service
+      - order-service
+    networks:
+      - shopmesh-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+# ─── Volumes ──────────────────────────────────────────────────────────────
+volumes:
+  mongo_data:
+    driver: local
+
+# ─── Networks ─────────────────────────────────────────────────────────────
+networks:
+  shopmesh-network:
+    driver: bridge
