@@ -1,393 +1,423 @@
-# ShopMesh — Microservices E-Commerce Platform
-
-A production-grade, fully containerized e-commerce application built with a modern microservices architecture. Features JWT authentication, product catalog, shopping cart, and order management — all orchestrated with Docker Compose.
-
----
+# ShopMesh — Production-Grade Microservices DevOps Platform
 
 ## Architecture Overview
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                          DOCKER NETWORK: shopmesh-network              │
-│                                                                        │
-│  ┌─────────────────┐     REST API     ┌──────────────────────────┐   │
-│  │   Frontend       │ ──────────────▶ │    Auth Service           │   │
-│  │   React + Nginx  │                 │    Node.js / Express      │   │
-│  │   Port: 3000     │ ──────────────▶ │    Port: 3001             │   │
-│  └─────────────────┘     REST API     │    MongoDB: authdb        │   │
-│           │                           └──────────────────────────┘   │
-│           │              REST API     ┌──────────────────────────┐   │
-│           ├────────────────────────▶  │   Product Service         │   │
-│           │                           │   Node.js / Express       │   │
-│           │                           │   Port: 3002              │   │
-│           │              REST API     │   MongoDB: productdb      │   │
-│           │                           └──────────────────────────┘   │
-│           │                                        │                  │
-│           │              REST API     ┌──────────────────────────┐   │
-│           └────────────────────────▶  │   Order Service           │   │
-│                                       │   Python / FastAPI        │   │
-│                                       │   Port: 3003              │   │
-│                                       │   MongoDB: orderdb        │   │
-│                                       └──────────────────────────┘   │
-│                                                    │                  │
-│                              ┌─────────────────────┘                  │
-│                              ▼                                        │
-│                     ┌────────────────┐                               │
-│                     │   MongoDB      │                               │
-│                     │   Port: 27017  │                               │
-│                     └────────────────┘                               │
-└────────────────────────────────────────────────────────────────────────┘
+Internet
+   │
+   ▼
+NGINX Gateway Fabric  (namespace: gateway)
+   ├── /              → frontend:80          (namespace: frontend)
+   ├── /api/auth      → auth-service:3001    (namespace: backend)
+   ├── /api/products  → product-service:3002 (namespace: backend)
+   └── /api/orders    → order-service:8000   (namespace: backend)
+
+Each backend service → own dedicated MongoDB StatefulSet (namespace: database)
+All MongoDB data persisted on NFS PersistentVolumes (5Gi each)
+NetworkPolicy: Default-Deny-All + explicit allowlists per service
 ```
 
-### Service Communication
+### Services
 
-| Service          | Tech Stack          | Port | Database       |
-|-----------------|---------------------|------|----------------|
-| Frontend        | React + Nginx       | 3000 | —              |
-| Auth Service    | Node.js / Express   | 3001 | MongoDB/authdb |
-| Product Service | Node.js / Express   | 3002 | MongoDB/productdb |
-| Order Service   | Python / FastAPI    | 3003 | MongoDB/orderdb |
-| MongoDB         | MongoDB 7.0         | 27017| —              |
+| Service | Language | Port | Database |
+|---------|----------|------|----------|
+| frontend | React + Nginx | 80 | — |
+| auth-service | Node.js / Express | 3001 | auth-mongodb |
+| product-service | Node.js / Express | 3002 | product-mongodb |
+| order-service | Python / FastAPI | 8000 | order-mongodb |
 
 ---
 
-## Project Structure
+## Repository Structure
 
 ```
 capstone/
-├── docker-compose.yml
-├── README.md
-│
-├── frontend/                     # React SPA
-│   ├── Dockerfile                # Multi-stage build (React → Nginx)
-│   ├── nginx.conf                # Nginx SPA config
-│   ├── package.json
-│   └── src/
-│       ├── App.js                # Routing & context providers
-│       ├── index.js
-│       ├── index.css             # Global dark theme styles
-│       ├── context/
-│       │   ├── AuthContext.js    # JWT auth state
-│       │   └── CartContext.js    # Shopping cart state
-│       ├── pages/
-│       │   ├── AuthPage.js       # Login / Register
-│       │   ├── ProductsPage.js   # Product catalog
-│       │   └── OrdersPage.js     # Order history
-│       ├── components/
-│       │   ├── Navbar.js
-│       │   └── CartModal.js
-│       └── services/
-│           └── api.js            # Axios API layer
-│
-├── auth-service/                 # Node.js Auth Microservice
+├── frontend/
+│   ├── src/                         # React source code
 │   ├── Dockerfile
-│   ├── package.json
-│   └── src/
-│       ├── index.js              # Express app entry point
-│       ├── models/User.js        # Mongoose User schema
-│       ├── routes/auth.js        # Register, Login, Validate
-│       └── middleware/auth.js    # JWT middleware
+│   ├── nginx.conf
+│   └── .github/workflows/ci.yml     # CI: lint → sonar → snyk → build → trivy → push
 │
-├── product-service/              # Node.js Product Microservice
+├── auth-service/
+│   ├── src/
 │   ├── Dockerfile
-│   ├── package.json
-│   └── src/
-│       ├── index.js              # Express app + product seeding
-│       ├── models/Product.js     # Mongoose Product schema
-│       ├── routes/products.js    # CRUD endpoints
-│       └── middleware/auth.js    # Validates via Auth Service
+│   └── .github/workflows/ci.yml
 │
-└── order-service/                # Python FastAPI Order Microservice
-    ├── Dockerfile
-    ├── requirements.txt
-    └── app/
-        ├── main.py               # FastAPI app + lifespan handler
-        ├── config.py             # Pydantic settings
-        ├── models.py             # Pydantic request/response models
-        ├── dependencies.py       # Auth & product service clients
-        └── routes/
-            └── orders.py         # Order CRUD endpoints
+├── product-service/
+│   ├── src/
+│   ├── Dockerfile
+│   └── .github/workflows/ci.yml
+│
+├── order-service/
+│   ├── app/
+│   ├── requirements.txt
+│   ├── Dockerfile
+│   └── .github/workflows/ci.yml
+│
+├── helm-charts/
+│   ├── auth-chart/                  # Deployment, Service, ConfigMap, Secret, NetworkPolicy
+│   │   ├── Chart.yaml
+│   │   ├── values.yaml
+│   │   └── templates/
+│   ├── product-chart/               # Same structure
+│   ├── order-chart/                 # Same structure
+│   ├── frontend-chart/              # Same structure
+│   └── mongodb/                     # Reusable StatefulSet chart (deploy 3×)
+│       ├── Chart.yaml
+│       ├── values.yaml
+│       └── templates/
+│
+├── k8s/
+│   ├── 00-namespaces.yaml           # Namespaces + Default-Deny NetworkPolicies
+│   ├── 01-nfs-storage.yaml          # StorageClass + 3 PersistentVolumes
+│   └── 02-gateway-api.yaml          # GatewayClass + Gateway + 4 HTTPRoutes
+│
+├── gitops/
+│   ├── argocd-applications.yaml     # AppProject + 7 ArgoCD Applications
+│   └── environments/
+│       ├── dev/common-values.yaml
+│       └── prod/
+│           ├── auth-values.yaml
+│           ├── product-values.yaml
+│           ├── order-values.yaml
+│           ├── frontend-values.yaml
+│           ├── auth-mongodb-values.yaml
+│           ├── product-mongodb-values.yaml
+│           └── order-mongodb-values.yaml
+│
+└── docker-compose.yml               # Local development
 ```
 
 ---
 
 ## Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (v20.10+)
-- [Docker Compose](https://docs.docker.com/compose/) (v2.0+, bundled with Docker Desktop)
-
-> **Note:** You do **not** need Node.js, Python, or MongoDB installed locally — Docker handles everything.
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Kubernetes | 1.28+ | Container orchestration |
+| kubectl | 1.28+ | Cluster management |
+| Helm | 3.13+ | Chart deployment |
+| ArgoCD | 2.9+ | GitOps CD |
+| NFS Server | — | Persistent storage for MongoDB |
+| GitHub account | — | GHCR container registry |
 
 ---
 
-## Quick Start
+## Step-by-Step Deployment Guide
+
+### Step 1 — Configure NFS Server
+
+Run on your NFS server (replace `10.0.0.10` with your server's IP):
 
 ```bash
-# 1. Clone / navigate to the project
-cd capstone
+sudo mkdir -p /exports/auth-mongodb /exports/product-mongodb /exports/order-mongodb
+sudo chmod 777 /exports/auth-mongodb /exports/product-mongodb /exports/order-mongodb
 
-# 2. Build and run all services
+sudo tee -a /etc/exports <<EOF
+/exports/auth-mongodb    *(rw,sync,no_subtree_check,no_root_squash)
+/exports/product-mongodb *(rw,sync,no_subtree_check,no_root_squash)
+/exports/order-mongodb   *(rw,sync,no_subtree_check,no_root_squash)
+EOF
+
+sudo exportfs -ra
+sudo systemctl restart nfs-kernel-server
+
+# Verify
+showmount -e localhost
+```
+
+### Step 2 — Create Namespaces & Network Policies
+
+```bash
+kubectl apply -f k8s/00-namespaces.yaml
+
+# Verify
+kubectl get namespaces | grep -E "frontend|backend|database|gateway"
+kubectl get networkpolicy -A
+```
+
+### Step 3 — Create NFS Storage (update IP first)
+
+```bash
+# Replace with your NFS server IP
+sed -i 's/10.0.0.10/YOUR_NFS_IP/g' k8s/01-nfs-storage.yaml
+
+kubectl apply -f k8s/01-nfs-storage.yaml
+
+# Verify PVs are Available
+kubectl get pv
+kubectl get storageclass
+```
+
+### Step 4 — Install NGINX Gateway Fabric
+
+```bash
+# Install Gateway API CRDs
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
+
+# Install NGINX Gateway Fabric via Helm
+helm repo add nginx-stable https://helm.nginx.com/stable
+helm repo update
+
+kubectl apply -f https://raw.githubusercontent.com/nginxinc/nginx-gateway-fabric/v1.3.0/deploy/crds.yaml
+
+helm install ngf nginx-stable/nginx-gateway-fabric \
+  --namespace gateway \
+  --create-namespace \
+  --set service.type=LoadBalancer
+
+# Wait for gateway pod
+kubectl wait --for=condition=ready pod \
+  -l app.kubernetes.io/name=nginx-gateway-fabric \
+  -n gateway --timeout=120s
+```
+
+### Step 5 — Apply Gateway API Routes
+
+```bash
+kubectl apply -f k8s/02-gateway-api.yaml
+
+# Verify
+kubectl get gateway -n gateway
+kubectl get httproute -A
+```
+
+### Step 6 — Deploy MongoDB Instances
+
+```bash
+# Deploy auth-mongodb
+helm install auth-mongodb ./helm-charts/mongodb \
+  --namespace database \
+  --set fullname=auth-mongodb \
+  --set auth.user=authuser \
+  --set auth.password=authpass \
+  --set auth.database=authdb \
+  --set ownerService=auth-service
+
+# Deploy product-mongodb
+helm install product-mongodb ./helm-charts/mongodb \
+  --namespace database \
+  --set fullname=product-mongodb \
+  --set auth.user=productuser \
+  --set auth.password=productpass \
+  --set auth.database=productdb \
+  --set ownerService=product-service
+
+# Deploy order-mongodb
+helm install order-mongodb ./helm-charts/mongodb \
+  --namespace database \
+  --set fullname=order-mongodb \
+  --set auth.user=orderuser \
+  --set auth.password=orderpass \
+  --set auth.database=orderdb \
+  --set ownerService=order-service
+
+# Wait for all MongoDB pods to be Running
+kubectl get pods -n database -w
+```
+
+### Step 7 — Install ArgoCD
+
+```bash
+kubectl create namespace argocd
+kubectl apply -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+# Wait for ArgoCD server
+kubectl wait --for=condition=available deployment/argocd-server \
+  -n argocd --timeout=300s
+
+# Get initial admin password
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" | base64 -d && echo
+
+# Access UI
+kubectl port-forward svc/argocd-server -n argocd 8080:443
+# Open: https://localhost:8080  (admin / <password above>)
+```
+
+### Step 8 — Apply ArgoCD Applications
+
+```bash
+kubectl apply -f gitops/argocd-applications.yaml
+
+# Watch sync status
+kubectl get applications -n argocd -w
+
+# Or use ArgoCD CLI
+argocd app list
+```
+
+### Step 9 — Configure GitHub Actions Secrets
+
+In **each** service repository, add these secrets under **Settings → Secrets → Actions**:
+
+| Secret | Value |
+|--------|-------|
+| `SONAR_TOKEN` | SonarQube user token |
+| `SONAR_HOST_URL` | `https://sonarqube.yourorg.com` |
+| `SNYK_TOKEN` | Snyk API token |
+| `HELM_CHARTS_TOKEN` | GitHub PAT with `repo` write scope |
+| `SLACK_WEBHOOK_URL` | Slack incoming webhook URL |
+
+> `GITHUB_TOKEN` is automatically provided — no manual setup needed for GHCR push.
+
+---
+
+## CI/CD Flow
+
+```
+Developer pushes to main
+        │
+        ▼
+GitHub Actions CI
+  1. npm/pip lint + unit tests
+  2. SonarQube code quality scan
+  3. Snyk dependency vulnerability scan
+  4. Docker build (local only)
+  5. Trivy container scan → blocks on CRITICAL/HIGH
+  6. Docker push to ghcr.io/<org>/<service>:<sha> + :latest
+  7. Update helm-charts/<service>/values.yaml image tag
+  8. Slack notification (pass/fail)
+        │
+        ▼
+ArgoCD detects values.yaml change
+        │
+        ▼
+ArgoCD syncs → kubectl apply → Rolling update
+```
+
+---
+
+## Verification Commands
+
+```bash
+# All pods running
+kubectl get pods -A
+
+# MongoDB StatefulSets
+kubectl get statefulsets -n database
+kubectl get pvc -n database
+
+# Backend services reachable
+kubectl get svc -n backend
+kubectl get endpoints -n backend
+
+# Gateway external IP
+GATEWAY_IP=$(kubectl get svc -n gateway \
+  -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
+echo "Gateway: http://$GATEWAY_IP"
+
+# Test endpoints
+curl http://$GATEWAY_IP/api/auth/health
+curl http://$GATEWAY_IP/api/products
+curl http://$GATEWAY_IP/api/orders
+curl http://$GATEWAY_IP/
+
+# ArgoCD all apps synced
+kubectl get applications -n argocd
+```
+
+---
+
+## Troubleshooting
+
+### Pod: ImagePullBackOff
+```bash
+kubectl describe pod <pod> -n backend
+# Fix: set GHCR package visibility to Public, or add imagePullSecret
+```
+
+### MongoDB: Connection refused
+```bash
+# Check StatefulSet is Running
+kubectl get pods -n database
+# Test DNS resolution from backend pod
+kubectl exec -it <auth-pod> -n backend -- \
+  curl auth-mongodb-headless.database.svc.cluster.local:27017
+# Check Secret values are correct
+kubectl get secret auth-secret -n backend -o jsonpath='{.data.MONGO_URI}' | base64 -d
+```
+
+### PVC: Pending
+```bash
+kubectl describe pvc auth-mongodb-pvc -n database
+# Fix: verify NFS server IP in k8s/01-nfs-storage.yaml
+# Verify NFS export: showmount -e <NFS_IP>
+# Check storageClassName matches: nfs-storage
+```
+
+### NetworkPolicy: Traffic blocked
+```bash
+# Test connectivity
+kubectl exec -it <order-pod> -n backend -- \
+  curl http://auth-service.backend.svc.cluster.local:3001/health
+# List all policies
+kubectl get networkpolicy -A
+# Describe specific policy
+kubectl describe networkpolicy order-service-netpol -n backend
+```
+
+### ArgoCD: OutOfSync
+```bash
+argocd app sync shopmesh-auth
+argocd app get shopmesh-auth
+# Check: values.yaml image tag is valid, repo is accessible
+```
+
+### Gateway: 404 / no route
+```bash
+kubectl describe httproute auth-route -n backend
+kubectl logs -n gateway \
+  -l app.kubernetes.io/name=nginx-gateway-fabric --tail=50
+# Check: GatewayClass controller name must match installed NGF
+```
+
+---
+
+## Network Policy Matrix
+
+| Source | Destination | Port | Allowed |
+|--------|-------------|------|---------|
+| gateway | frontend | 80 | ✅ |
+| gateway | auth/product/order | 3001/3002/8000 | ✅ |
+| frontend | auth/product/order | 3001/3002/8000 | ✅ |
+| order-service | auth-service | 3001 | ✅ |
+| order-service | product-service | 3002 | ✅ |
+| auth-service | auth-mongodb | 27017 | ✅ |
+| product-service | product-mongodb | 27017 | ✅ |
+| order-service | order-mongodb | 27017 | ✅ |
+| auth-service | product-mongodb | 27017 | ❌ |
+| Any → Any (default) | Any | Any | ❌ |
+
+---
+
+## Local Development
+
+```bash
+# Start all services locally with Docker Compose
 docker-compose up --build
 
-# 3. Access the application
-open http://localhost:3000
-```
-
-The first run will take 3-5 minutes to:
-1. Build all Docker images
-2. Start MongoDB
-3. Start backend services (with retry logic)
-4. Seed the product database with 8 sample products
-5. Build and serve the React frontend
-
----
-
-## Service URLs
-
-| Service          | URL                                  |
-|-----------------|--------------------------------------|
-| Frontend         | http://localhost:3000               |
-| Auth Service API | http://localhost:3001               |
-| Product Service API | http://localhost:3002            |
-| Order Service API (FastAPI Docs) | http://localhost:3003/docs |
-| MongoDB          | mongodb://localhost:27017           |
-
----
-
-## Environment Variables
-
-### Auth Service
-
-| Variable        | Default                                    | Description              |
-|----------------|---------------------------------------------|--------------------------|
-| `PORT`          | `3001`                                     | Service port             |
-| `MONGO_URI`     | `mongodb://mongo:27017/authdb`             | MongoDB connection URI   |
-| `JWT_SECRET`    | `shopmesh_jwt_secret_change_in_production` | JWT signing secret       |
-| `JWT_EXPIRES_IN`| `24h`                                      | Token expiry duration    |
-
-### Product Service
-
-| Variable           | Default                                | Description              |
-|-------------------|----------------------------------------|--------------------------|
-| `PORT`             | `3002`                                | Service port             |
-| `MONGO_URI`        | `mongodb://mongo:27017/productdb`     | MongoDB connection URI   |
-| `AUTH_SERVICE_URL` | `http://auth-service:3001`            | Auth service base URL    |
-
-### Order Service
-
-| Variable              | Default                           | Description                |
-|----------------------|-----------------------------------|----------------------------|
-| `MONGO_URI`           | `mongodb://mongo:27017`          | MongoDB connection URI     |
-| `DB_NAME`             | `orderdb`                        | Database name              |
-| `AUTH_SERVICE_URL`    | `http://auth-service:3001`       | Auth service base URL      |
-| `PRODUCT_SERVICE_URL` | `http://product-service:3002`    | Product service base URL   |
-| `PORT`                | `3003`                           | Service port               |
-
-### Frontend (Build-Time Args)
-
-| Variable                        | Default                    | Description               |
-|--------------------------------|----------------------------|---------------------------|
-| `REACT_APP_AUTH_SERVICE_URL`    | `http://localhost:3001`   | Auth service public URL   |
-| `REACT_APP_PRODUCT_SERVICE_URL` | `http://localhost:3002`   | Product service public URL|
-| `REACT_APP_ORDER_SERVICE_URL`   | `http://localhost:3003`   | Order service public URL  |
-
----
-
-## API Endpoints
-
-### Auth Service (`http://localhost:3001`)
-
-| Method | Endpoint              | Auth Required | Description              |
-|--------|-----------------------|---------------|--------------------------|
-| GET    | `/health`             | No            | Health check             |
-| POST   | `/api/auth/register`  | No            | Register new user        |
-| POST   | `/api/auth/login`     | No            | Login and get JWT token  |
-| GET    | `/api/auth/me`        | Yes           | Get current user profile |
-| POST   | `/api/auth/validate`  | No            | Validate JWT token (internal use) |
-
-**Register Request Body:**
-```json
-{
-  "name": "John Doe",
-  "email": "john@example.com",
-  "password": "password123"
-}
-```
-
-**Login Request Body:**
-```json
-{
-  "email": "john@example.com",
-  "password": "password123"
-}
+# Services available at:
+# Frontend:        http://localhost:3000
+# Auth Service:    http://localhost:3001
+# Product Service: http://localhost:3002
+# Order Service:   http://localhost:8000
+# MongoDB:         mongodb://localhost:27017
 ```
 
 ---
 
-### Product Service (`http://localhost:3002`)
+## Security Checklist
 
-| Method | Endpoint              | Auth Required | Description              |
-|--------|-----------------------|---------------|--------------------------|
-| GET    | `/health`             | No            | Health check             |
-| GET    | `/api/products`       | No            | List products (paginated, filterable) |
-| GET    | `/api/products/:id`   | No            | Get single product       |
-| POST   | `/api/products`       | Yes           | Create new product       |
-| PUT    | `/api/products/:id`   | Yes           | Update product           |
-| DELETE | `/api/products/:id`   | Yes           | Soft-delete product      |
-
-**Query params for GET /api/products:**
-- `category` — Filter by category
-- `minPrice`, `maxPrice` — Price range filter
-- `search` — Text search
-- `page`, `limit` — Pagination
-
----
-
-### Order Service (`http://localhost:3003`)
-
-| Method | Endpoint                       | Auth Required | Description              |
-|--------|--------------------------------|---------------|--------------------------|
-| GET    | `/health`                      | No            | Health check             |
-| POST   | `/api/orders`                  | Yes           | Create a new order       |
-| GET    | `/api/orders`                  | Yes           | Get all my orders        |
-| GET    | `/api/orders/:id`              | Yes           | Get specific order       |
-| PATCH  | `/api/orders/:id/status`       | Yes           | Update order status      |
-
-> Full interactive API docs available at **http://localhost:3003/docs** (FastAPI Swagger UI)
-
-**Create Order Request Body:**
-```json
-{
-  "items": [
-    { "product_id": "PRODUCT_OBJECT_ID", "quantity": 2 }
-  ],
-  "shipping_address": "123 Main St, New York, NY 10001"
-}
-```
-
----
-
-## Useful Commands
-
-```bash
-# Start all services
-docker-compose up --build
-
-# Start in detached mode (background)
-docker-compose up --build -d
-
-# View logs for a specific service
-docker-compose logs -f auth-service
-docker-compose logs -f product-service
-docker-compose logs -f order-service
-docker-compose logs -f frontend
-
-# View all logs
-docker-compose logs -f
-
-# Stop all services
-docker-compose down
-
-# Stop and remove volumes (clean state)
-docker-compose down -v
-
-# Rebuild a single service
-docker-compose up --build auth-service
-
-# Check service health
-docker-compose ps
-```
-
----
-
-## Kubernetes Deployment (High-Level Guide)
-
-To deploy ShopMesh to a Kubernetes cluster, follow these high-level steps:
-
-### 1. Prerequisites
-- A running Kubernetes cluster (AKS, EKS, GKE, or local `minikube`/`kind`)
-- `kubectl` configured to point to your cluster
-- A container registry (Docker Hub, ECR, GCR, etc.)
-- `helm` (optional, for MongoDB)
-
-### 2. Push Images to Registry
-```bash
-# Tag and push each service image
-docker tag capstone-auth-service your-registry/shopmesh-auth:latest
-docker push your-registry/shopmesh-auth:latest
-
-docker tag capstone-product-service your-registry/shopmesh-products:latest
-docker push your-registry/shopmesh-products:latest
-
-docker tag capstone-order-service your-registry/shopmesh-orders:latest
-docker push your-registry/shopmesh-orders:latest
-
-docker tag capstone-frontend your-registry/shopmesh-frontend:latest
-docker push your-registry/shopmesh-frontend:latest
-```
-
-### 3. Deploy MongoDB
-Use the official MongoDB Helm chart or a managed database service:
-```bash
-helm repo add bitnami https://charts.bitnami.com/bitnami
-helm install mongodb bitnami/mongodb --set auth.enabled=false
-```
-
-### 4. Create Kubernetes Manifests
-For each service, create:
-- `Deployment` — Pod spec with image, env vars, resource limits
-- `Service` — ClusterIP for internal communication, LoadBalancer/NodePort for external access
-- `ConfigMap` — Non-sensitive environment configuration
-- `Secret` — Sensitive values (JWT secret, MongoDB URI)
-
-### 5. Service Discovery
-Replace Docker Compose service names with Kubernetes service DNS names:
-- `mongo` → `mongodb.default.svc.cluster.local`
-- `auth-service` → `auth-service.default.svc.cluster.local`
-- `product-service` → `product-service.default.svc.cluster.local`
-
-### 6. Ingress Controller
-Deploy an Nginx Ingress Controller and create an Ingress resource to route:
-- `yourdomain.com/` → Frontend service
-- `yourdomain.com/api/auth` → Auth service (if needed)
-
-### 7. Horizontal Pod Autoscaling (HPA)
-```bash
-kubectl autoscale deployment auth-service --cpu-percent=70 --min=2 --max=10
-kubectl autoscale deployment product-service --cpu-percent=70 --min=2 --max=10
-kubectl autoscale deployment order-service --cpu-percent=70 --min=2 --max=10
-```
-
-### 8. Secrets Management
-```bash
-kubectl create secret generic shopmesh-secrets \
-  --from-literal=jwt-secret=YOUR_SECRET \
-  --from-literal=mongo-uri=YOUR_MONGO_URI
-```
-
----
-
-## Security Notes
-
-> ⚠️ **For production use, always:**
-> - Change the `JWT_SECRET` to a strong random value
-> - Enable MongoDB authentication
-> - Use HTTPS with valid SSL certificates
-> - Set `NODE_ENV=production`
-> - Use Kubernetes Secrets or a secrets manager (HashiCorp Vault, AWS Secrets Manager)
-> - Implement rate limiting on auth endpoints
-> - Review and restrict CORS origins
-
----
-
-## Tech Stack Summary
-
-| Layer       | Technology             |
-|-------------|------------------------|
-| Frontend    | React 18, React Router v6, Axios |
-| Auth Service| Node.js 20, Express 4, Mongoose, bcryptjs, jsonwebtoken |
-| Product Service | Node.js 20, Express 4, Mongoose |
-| Order Service | Python 3.11, FastAPI, Motor (async MongoDB), httpx |
-| Database    | MongoDB 7.0           |
-| Containerization | Docker, Docker Compose |
-| Web Server  | Nginx (Alpine)        |
+- [x] Default-Deny NetworkPolicies in all namespaces
+- [x] Cross-database access blocked at network level
+- [x] Secrets stored as Kubernetes Secrets (not ConfigMaps)
+- [x] Trivy blocks images with CRITICAL/HIGH CVEs
+- [x] Snyk scans dependencies before build
+- [x] SonarQube enforces code quality gates
+- [x] MongoDB `prune: false` in ArgoCD (prevents accidental data loss)
+- [x] Image tags use commit SHA for full traceability
+- [ ] Replace `CHANGE_ME_JWT_SECRET` with a real 32+ char secret
+- [ ] Replace `10.0.0.10` with your actual NFS server IP
+- [ ] Replace `YOUR_GITHUB_ORG` with your GitHub username/org
