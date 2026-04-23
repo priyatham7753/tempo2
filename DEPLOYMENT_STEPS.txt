@@ -145,7 +145,7 @@ STEP 9: Create NFS StorageClass and PersistentVolumes
   # STATUS must be: Available
 
 ================================================================================
-PHASE 5 — GATEWAY API (NGINX GATEWAY FABRIC)
+PHASE 5 — GATEWAY API (KGATEWAY)
 ================================================================================
 
 STEP 10: Install Gateway API CRDs
@@ -158,27 +158,29 @@ STEP 10: Install Gateway API CRDs
 
 --------------------------------------------------------------------------------
 
-STEP 11: Install NGINX Gateway Fabric
+STEP 11: Install kgateway
 -------------------------------------------------------
-  # Add Helm repo
-  helm repo add nginx-stable https://helm.nginx.com/stable
-  helm repo update
-
-  # Install NGINX Gateway Fabric CRDs
-  kubectl apply -f https://raw.githubusercontent.com/nginxinc/nginx-gateway-fabric/v1.3.0/deploy/crds.yaml
-
-  # Install NGINX Gateway Fabric controller
-  helm install ngf nginx-stable/nginx-gateway-fabric \
-    --namespace gateway \
+  # Install kgateway CRDs
+  helm install kgateway-crds oci://cr.kgateway.dev/kgateway-helm/kgateway-crds \
+    --namespace kgateway-system \
     --create-namespace \
-    --set service.type=LoadBalancer
+    --version 1.0.0
 
-  # Wait for gateway pod to be ready
-  kubectl wait --for=condition=ready pod \
-    -l app.kubernetes.io/name=nginx-gateway-fabric \
-    -n gateway --timeout=120s
+  # Install kgateway controller
+  helm install kgateway oci://cr.kgateway.dev/kgateway-helm/kgateway \
+    --namespace kgateway-system \
+    --version 1.0.0
 
-  # Check pod is Running
+  # Verify kgateway controller pod is Running
+  kubectl get pods -n kgateway-system
+
+  # Wait for kgateway controller to be ready
+  kubectl wait --for=condition=available deployment/kgateway \
+    -n kgateway-system --timeout=120s
+
+  # After Step 12 (Gateway manifest), kgateway provisions
+  # an Envoy proxy Deployment + LoadBalancer Service in the 'gateway' namespace.
+  # Check the proxy once Step 12 is done:
   kubectl get pods -n gateway
   kubectl get svc -n gateway
   # Note the EXTERNAL-IP — this is your public gateway IP
@@ -382,7 +384,7 @@ STEP 27: Check all pods are healthy
 STEP 28: Get the Gateway external IP
 -------------------------------------------------------
   kubectl get svc -n gateway
-  # Copy the EXTERNAL-IP from the nginx-gateway-fabric service
+  # Copy the EXTERNAL-IP from the kgateway proxy service
   # This is your application's public URL: http://EXTERNAL-IP
 
 --------------------------------------------------------------------------------
@@ -505,9 +507,10 @@ TROUBLESHOOTING QUICK FIXES
            Check MONGO_URI secret is correct
            Check service can reach MongoDB
 
-  PROBLEM: 502 Bad Gateway from NGINX
+  PROBLEM: 502 Bad Gateway
   FIX:     kubectl get pods -n backend
-           Backend service pod must be Running before Gateway can route to it
+           Backend service pod must be Running before kgateway can route to it
+           Check kgateway proxy logs: kubectl logs -n gateway -l app=kgateway --tail=30
 
   PROBLEM: MongoDB auth failed
   FIX:     Check Secret values:

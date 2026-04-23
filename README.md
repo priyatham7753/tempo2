@@ -6,7 +6,7 @@
 Internet
    │
    ▼
-NGINX Gateway Fabric  (namespace: gateway)
+kgateway (Envoy-based)  (namespace: gateway / controller: kgateway-system)
    ├── /              → frontend:80          (namespace: frontend)
    ├── /api/auth      → auth-service:3001    (namespace: backend)
    ├── /api/products  → product-service:3002 (namespace: backend)
@@ -149,27 +149,35 @@ kubectl get pv
 kubectl get storageclass
 ```
 
-### Step 4 — Install NGINX Gateway Fabric
+### Step 4 — Install kgateway
 
 ```bash
-# Install Gateway API CRDs
+# Install Gateway API CRDs (standard channel)
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
 
-# Install NGINX Gateway Fabric via Helm
-helm repo add nginx-stable https://helm.nginx.com/stable
-helm repo update
-
-kubectl apply -f https://raw.githubusercontent.com/nginxinc/nginx-gateway-fabric/v1.3.0/deploy/crds.yaml
-
-helm install ngf nginx-stable/nginx-gateway-fabric \
-  --namespace gateway \
+# Install kgateway CRDs
+helm install kgateway-crds oci://cr.kgateway.dev/kgateway-helm/kgateway-crds \
+  --namespace kgateway-system \
   --create-namespace \
-  --set service.type=LoadBalancer
+  --version 1.0.0
 
-# Wait for gateway pod
-kubectl wait --for=condition=ready pod \
-  -l app.kubernetes.io/name=nginx-gateway-fabric \
-  -n gateway --timeout=120s
+# Install kgateway controller
+helm install kgateway oci://cr.kgateway.dev/kgateway-helm/kgateway \
+  --namespace kgateway-system \
+  --version 1.0.0
+
+# Verify kgateway controller is running
+kubectl get pods -n kgateway-system
+
+# Wait for kgateway controller ready
+kubectl wait --for=condition=available deployment/kgateway \
+  -n kgateway-system --timeout=120s
+
+# After applying k8s/02-gateway-api.yaml (Step 5), kgateway will provision
+# an Envoy proxy pod + LoadBalancer Service in the 'gateway' namespace.
+kubectl get pods -n gateway
+kubectl get svc -n gateway
+# Note the EXTERNAL-IP — this is your public endpoint
 ```
 
 ### Step 5 — Apply Gateway API Routes
@@ -368,9 +376,12 @@ argocd app get shopmesh-auth
 ### Gateway: 404 / no route
 ```bash
 kubectl describe httproute auth-route -n backend
-kubectl logs -n gateway \
-  -l app.kubernetes.io/name=nginx-gateway-fabric --tail=50
-# Check: GatewayClass controller name must match installed NGF
+kubectl logs -n kgateway-system \
+  -l app.kubernetes.io/name=kgateway --tail=50
+# Also check proxy logs in gateway namespace
+kubectl logs -n gateway -l app=kgateway --tail=50
+# Verify GatewayClass controllerName = gateway.kgateway.dev/kgateway
+kubectl describe gatewayclass kgateway
 ```
 
 ---
